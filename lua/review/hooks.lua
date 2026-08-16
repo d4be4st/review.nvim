@@ -42,6 +42,35 @@ local function get_lifecycle()
   return lifecycle
 end
 
+---Normalize a path returned by codediff.
+---codediff >= 2.50 (commit fe7ab20, "unify path handling with typed Path") returns
+---Path tables `{ relative = string, absolute = string }`; earlier versions returned
+---plain strings. Everything downstream here expects a string.
+---@param p string|table|nil
+---@return string|nil
+local function path_str(p)
+  if type(p) ~= "table" then
+    return p
+  end
+  local s = p.absolute
+  if s == nil or s == "" then
+    s = p.relative
+  end
+  if s == nil or s == "" then
+    return nil
+  end
+  return s
+end
+
+---Single boundary for reading paths out of a codediff session.
+---@param lifecycle table
+---@param tabpage number
+---@return string|nil original, string|nil modified
+local function session_paths(lifecycle, tabpage)
+  local orig, mod = lifecycle.get_paths(tabpage)
+  return path_str(orig), path_str(mod)
+end
+
 ---@return table|nil codediff session
 function M.get_session()
   if not current_tabpage then
@@ -89,7 +118,7 @@ function M.get_cursor_position()
   local current_buf = vim.api.nvim_get_current_buf()
 
   -- Get paths from session
-  local orig_path, mod_path = lifecycle.get_paths(current_tabpage)
+  local orig_path, mod_path = session_paths(lifecycle, current_tabpage)
   local orig_buf, mod_buf = lifecycle.get_buffers(current_tabpage)
 
   -- Determine which file we're on based on buffer
@@ -157,7 +186,7 @@ function M.get_paths()
   if not lifecycle or not current_tabpage then
     return nil, nil
   end
-  local orig_path, mod_path = lifecycle.get_paths(current_tabpage)
+  local orig_path, mod_path = session_paths(lifecycle, current_tabpage)
   return relativize_path(orig_path, lifecycle, current_tabpage),
     relativize_path(mod_path, lifecycle, current_tabpage)
 end
@@ -174,7 +203,7 @@ function M.on_session_created(tabpage)
   local orig_buf, mod_buf = lifecycle.get_buffers(tabpage)
 
   -- Set filetype for syntax highlighting (needed for commit reviews)
-  local raw_orig_path, raw_mod_path = lifecycle.get_paths(tabpage)
+  local raw_orig_path, raw_mod_path = session_paths(lifecycle, tabpage)
   set_buffer_filetype(orig_buf, raw_orig_path)
   set_buffer_filetype(mod_buf, raw_mod_path)
 

@@ -181,7 +181,34 @@ local function show_help()
 end
 
 ---@param bufnr number
+---@return boolean
+-- LOCAL PATCH (not upstream): only the session's own buffers may receive review's
+-- single-key maps. The BufEnter hook in setup_keymaps fires for ANY buffer entered
+-- in the review tab, which stamped i/d/c/e onto the nui comment popup and made it
+-- impossible to edit text there ("can't add comment" on `i`).
+local function is_session_buffer(bufnr)
+  local ok, lifecycle = pcall(require, "codediff.ui.lifecycle")
+  if not ok then
+    return true
+  end
+  local tabpage = vim.api.nvim_get_current_tabpage()
+  if not lifecycle.get_session(tabpage) then
+    return true
+  end
+  local orig_buf, mod_buf = lifecycle.get_buffers(tabpage)
+  if bufnr == orig_buf or bufnr == mod_buf then
+    return true
+  end
+  local explorer = lifecycle.get_explorer(tabpage)
+  return explorer ~= nil and bufnr == explorer.bufnr
+end
+
+---@param bufnr number
 local function set_buffer_keymaps(bufnr)
+  if not is_session_buffer(bufnr) then
+    return
+  end
+
   -- Clear existing keymaps first
   clear_buffer_keymaps(bufnr)
 

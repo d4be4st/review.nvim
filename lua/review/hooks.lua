@@ -255,8 +255,18 @@ function M.on_session_created(tabpage)
 end
 
 function M._focus_modified_pane(lifecycle, tabpage)
-  local cur_cfg = vim.api.nvim_win_get_config(vim.api.nvim_get_current_win())
+  local cur_win = vim.api.nvim_get_current_win()
+  local cur_cfg = vim.api.nvim_win_get_config(cur_win)
   if cur_cfg.relative ~= "" then
+    return
+  end
+  -- Never yank focus out of the explorer. on_session_created re-runs on every
+  -- User CodeDiffFileSelect, so with codediff's explorer.auto_open_on_cursor each
+  -- j/k would pull the cursor into the diff pane ~250ms later, making it impossible
+  -- to browse files from the explorer. Respect codediff's explorer.initial_focus
+  -- instead of overriding it — set it to "modified" to land in the diff on open.
+  local explorer = lifecycle.get_explorer(tabpage)
+  if explorer and explorer.winid == cur_win then
     return
   end
   local sess = lifecycle.get_session(tabpage)

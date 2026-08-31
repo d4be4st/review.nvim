@@ -9,17 +9,52 @@ local function notify(msg, level)
   vim.notify(msg, level, { title = "review.nvim" })
 end
 
----@param initial_type? "note"|"suggestion"|"issue"|"praise"
-function M.add_at_cursor(initial_type)
+---@param prompt string
+---@param callback fun(comment: Comment)
+local function resolve_at_cursor(prompt, callback)
   local file, line, side = hooks.get_cursor_position()
   if not file or not line then
     notify("Could not determine cursor position", vim.log.levels.WARN)
     return
   end
 
-  local existing = store.get_at_line(file, line, side)
-  if existing then
-    notify("Comment already exists at this line. Use edit instead.", vim.log.levels.WARN)
+  local matches = store.get_all_at_line(file, line, side)
+  if #matches == 0 and line == 1 then
+    local file_comment = store.get_file_comment(file)
+    if file_comment then
+      matches = { file_comment }
+    end
+  end
+
+  if #matches == 0 then
+    notify("No comment at cursor position", vim.log.levels.WARN)
+    return
+  end
+
+  if #matches == 1 then
+    callback(matches[1])
+    return
+  end
+
+  local cfg = require("review.config").get()
+  vim.ui.select(matches, {
+    prompt = prompt,
+    format_item = function(comment)
+      local type_info = cfg.comment_types[comment.type]
+      return string.format("%s %s", type_info and type_info.icon or "●", vim.split(comment.text, "\n")[1])
+    end,
+  }, function(choice)
+    if choice then
+      callback(choice)
+    end
+  end)
+end
+
+---@param initial_type? "note"|"suggestion"|"issue"|"praise"
+function M.add_at_cursor(initial_type)
+  local file, line, side = hooks.get_cursor_position()
+  if not file or not line then
+    notify("Could not determine cursor position", vim.log.levels.WARN)
     return
   end
 
@@ -79,12 +114,6 @@ function M.add_for_range(initial_type)
     return
   end
 
-  local existing = store.get_overlapping(file, start_line, end_line, side)
-  if existing then
-    notify("Comment already exists in this range. Use edit instead.", vim.log.levels.WARN)
-    return
-  end
-
   popup.open(initial_type or "note", nil, function(comment_type, text)
     if comment_type and text then
       store.add(file, start_line, comment_type, text, end_line, side)
@@ -97,60 +126,34 @@ function M.add_for_range(initial_type)
 end
 
 function M.edit_at_cursor()
-  local file, line, side = hooks.get_cursor_position()
-  if not file or not line then
-    notify("Could not determine cursor position", vim.log.levels.WARN)
-    return
-  end
-
-  local comment = store.get_at_line(file, line, side)
-  if not comment and line == 1 then
-    comment = store.get_file_comment(file)
-  end
-  if not comment then
-    notify("No comment at cursor position", vim.log.levels.WARN)
-    return
-  end
-
-  popup.open(comment.type, comment.text, function(new_type, text)
-    if new_type and text then
-      store.update(comment.id, text, new_type)
-      -- Schedule refresh to run after popup is fully closed
-      vim.schedule(function()
-        marks.refresh()
-      end)
-      notify("Comment updated", vim.log.levels.INFO)
-    end
+  resolve_at_cursor("Edit which comment?", function(comment)
+    popup.open(comment.type, comment.text, function(new_type, text)
+      if new_type and text then
+        store.update(comment.id, text, new_type)
+        -- Schedule refresh to run after popup is fully closed
+        vim.schedule(function()
+          marks.refresh()
+        end)
+        notify("Comment updated", vim.log.levels.INFO)
+      end
+    end)
   end)
 end
 
 function M.delete_at_cursor()
-  local file, line, side = hooks.get_cursor_position()
-  if not file or not line then
-    notify("Could not determine cursor position", vim.log.levels.WARN)
-    return
-  end
-
-  local comment = store.get_at_line(file, line, side)
-  if not comment and line == 1 then
-    comment = store.get_file_comment(file)
-  end
-  if not comment then
-    notify("No comment at cursor position", vim.log.levels.WARN)
-    return
-  end
-
-  vim.ui.select({ "Yes", "No" }, {
-    prompt = "Delete this comment?",
-  }, function(choice)
-    if choice == "Yes" then
-      store.delete(comment.id)
-      -- Schedule refresh to run after UI is closed
-      vim.schedule(function()
-        marks.refresh()
-      end)
-      notify("Comment deleted", vim.log.levels.INFO)
-    end
+  resolve_at_cursor("Delete which comment?", function(comment)
+    vim.ui.select({ "Yes", "No" }, {
+      prompt = "Delete this comment?",
+    }, function(choice)
+      if choice == "Yes" then
+        store.delete(comment.id)
+        -- Schedule refresh to run after UI is closed
+        vim.schedule(function()
+          marks.refresh()
+        end)
+        notify("Comment deleted", vim.log.levels.INFO)
+      end
+    end)
   end)
 end
 

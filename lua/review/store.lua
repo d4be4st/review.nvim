@@ -11,6 +11,7 @@ local storage = require("review.storage")
 ---@field type "note"|"suggestion"|"issue"|"praise"
 ---@field text string
 ---@field created_at number
+---@field updated_at? number
 
 ---@type table<string, Comment[]>
 M.comments = {}
@@ -124,18 +125,26 @@ end
 ---@param file string
 ---@param line number
 ---@param side? "old"|"new"
----@return Comment|nil
-function M.get_at_line(file, line, side)
-  local comments = M.comments[file] or {}
-  for _, comment in ipairs(comments) do
+---@return Comment[]
+function M.get_all_at_line(file, line, side)
+  local matches = {}
+  for _, comment in ipairs(M.comments[file] or {}) do
     local line_end = comment.line_end or comment.line
     if line >= comment.line and line <= line_end then
       if not side or (comment.side or "new") == side then
-        return comment
+        table.insert(matches, comment)
       end
     end
   end
-  return nil
+  return matches
+end
+
+---@param file string
+---@param line number
+---@param side? "old"|"new"
+---@return Comment|nil
+function M.get_at_line(file, line, side)
+  return M.get_all_at_line(file, line, side)[1]
 end
 
 ---@param file string
@@ -168,6 +177,7 @@ function M.update(id, text, new_type)
         if new_type then
           comment.type = new_type
         end
+        comment.updated_at = os.time()
         persist()
         return true
       end
@@ -194,6 +204,12 @@ function M.delete(id)
   return false
 end
 
+---@param comment Comment
+---@return number
+local function seq(comment)
+  return tonumber(comment.id:match("_(%d+)$")) or 0
+end
+
 ---@return Comment[]
 function M.get_all()
   local all = {}
@@ -206,7 +222,10 @@ function M.get_all()
     if a.file ~= b.file then
       return a.file < b.file
     end
-    return a.line < b.line
+    if a.line ~= b.line then
+      return a.line < b.line
+    end
+    return seq(a) < seq(b)
   end)
   return all
 end

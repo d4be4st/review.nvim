@@ -192,6 +192,49 @@ function M.goto_prev()
   notify("No previous comments in this file", vim.log.levels.INFO)
 end
 
+---@param comment Comment
+local function goto_comment(comment)
+  local tabpage = hooks.get_current_tabpage()
+  local ok, lifecycle = pcall(require, "codediff.ui.lifecycle")
+  if not ok or not tabpage then
+    return
+  end
+
+  local explorer = lifecycle.get_explorer(tabpage)
+  if explorer then
+    for _, file in ipairs(require("codediff.ui.explorer.refresh").get_all_files(explorer.tree)) do
+      if file.data.path == comment.file then
+        if explorer.current_file_path ~= comment.file then
+          explorer.on_file_select(file.data, { no_jump = true })
+        end
+        break
+      end
+    end
+  end
+
+  local attempts = 0
+  local function jump()
+    attempts = attempts + 1
+    local orig_path, mod_path = hooks.get_paths()
+    if mod_path ~= comment.file and orig_path ~= comment.file then
+      if attempts < 40 then
+        vim.defer_fn(jump, 50)
+      end
+      return
+    end
+    local orig_win, mod_win = lifecycle.get_windows(tabpage)
+    local win = mod_win
+    if comment.side == "old" and orig_win ~= mod_win and orig_win and vim.api.nvim_win_is_valid(orig_win) then
+      win = orig_win
+    end
+    if win and vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_set_current_win(win)
+      pcall(vim.api.nvim_win_set_cursor, win, { comment.line == 0 and 1 or comment.line, 0 })
+    end
+  end
+  jump()
+end
+
 function M.list()
   local config = require("review.config").get()
   local all_comments = store.get_all()
@@ -223,47 +266,41 @@ function M.list()
       location = string.format("%s:%d", comment.file, comment.line)
     end
     local display = string.format("%s %s [%s] %s", icon, location, name, comment.text)
-    table.insert(items, { display = display, comment = comment })
+    local header = string.format("**%s** · %s · `%s`", name, comment.author or "me", location)
+    table.insert(items, {
+      display = display,
+      text = display,
+      comment = comment,
+      preview = { text = header .. "\n\n" .. comment.text, ft = "markdown" },
+    })
   end
 
-  -- Show picker
+  local snacks_ok, Snacks = pcall(require, "snacks")
+  if snacks_ok and Snacks.picker then
+    Snacks.picker.pick({
+      title = "Review comments",
+      items = items,
+      format = "text",
+      preview = "preview",
+      confirm = function(picker, item)
+        picker:close()
+        if item then
+          goto_comment(item.comment)
+        end
+      end,
+    })
+    return
+  end
+
   vim.ui.select(items, {
     prompt = "Comments:",
     format_item = function(item)
       return item.display
     end,
   }, function(choice)
-    if not choice then
-      return
+    if choice then
+      goto_comment(choice.comment)
     end
-
-    local comment = choice.comment
-
-    -- Try to navigate to the file in codediff explorer
-    local ok, lifecycle = pcall(require, "codediff.ui.lifecycle")
-    if ok then
-      local tabpage = hooks.get_current_tabpage()
-      if tabpage then
-        local explorer = lifecycle.get_explorer(tabpage)
-        if explorer then
-          local explorer_mod = require("codediff.ui.explorer")
-          -- Find and select the file in explorer
-          -- This is a best-effort navigation
-          for i, node in ipairs(explorer.tree:get_nodes()) do
-            if node.path == comment.file then
-              explorer_mod.select_node(explorer, node)
-              break
-            end
-          end
-        end
-      end
-    end
-
-    -- Jump to line after a short delay (line 1 for file-level comments)
-    vim.defer_fn(function()
-      local target_line = comment.line == 0 and 1 or comment.line
-      pcall(vim.api.nvim_win_set_cursor, 0, { target_line, 0 })
-    end, 100)
   end)
 end
 
